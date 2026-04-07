@@ -19,6 +19,21 @@ Most useful commands:
 - `python -m hids --share-report` for a privacy-safe Markdown report
 - `python -m hids --watch --interval 5 --iterations 0` for continuous monitoring
 
+## Open Source
+
+HostSage is now open source under the MIT License, and contributions are welcome.
+
+If you want to improve this project, you can help with:
+
+- better beginner-friendly alert explanations
+- privacy-safe reporting improvements
+- bug fixes
+- tests
+- documentation
+- usability improvements for Windows users
+
+Contribution guidance is available in [CONTRIBUTING.md](CONTRIBUTING.md), and the project license is available in [LICENSE](LICENSE).
+
 ## Important Privacy Notice
 
 > Important: Before sharing this project, its exported results, or any copied log/database files with another person, clear all locally generated monitoring data first.
@@ -177,6 +192,8 @@ tests/
   test_service.py
   test_state.py
   test_windows_service.py
+CONTRIBUTING.md
+LICENSE
 PROJECT_REPORT.md
 ```
 
@@ -470,6 +487,17 @@ This report is designed for safer sharing. Raw local IPs, raw remote IPs, full f
 python -m unittest discover -s tests -v
 ```
 
+## Contributing
+
+Contributions are welcome. If you want to help, start with:
+
+- improving explainable alerts
+- strengthening privacy-safe redaction
+- adding tests
+- improving documentation and terminal usability
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
 ## Limitations
 
 - This tool is heuristic-based, so false positives are possible.
@@ -480,3 +508,7 @@ python -m unittest discover -s tests -v
 ## Summary
 
 This project helps make systems safer by turning raw network activity into readable security alerts. Instead of manually checking connections and guessing what is normal, users can quickly spot suspicious behavior, identify the responsible process, and investigate with better context.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
