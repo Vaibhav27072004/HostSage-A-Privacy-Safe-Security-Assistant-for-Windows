@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Generated monitoring data can contain sensitive, machine-specific information.
+logs/*
+!logs/.gitkeep

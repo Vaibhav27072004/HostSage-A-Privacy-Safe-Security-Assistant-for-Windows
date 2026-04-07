@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hostsage"
+version = "1.0.0"
+description = "HostSage: A Privacy-Safe Security Assistant for Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "Flask>=3.0",
+    "psutil>=5.9",
+    "pywin32>=306; platform_system == 'Windows'",
+    "waitress>=3.0",
+]
+
+[project.scripts]
+hostsage = "hids.cli:main"
+attack-detector = "hids.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hids*"]

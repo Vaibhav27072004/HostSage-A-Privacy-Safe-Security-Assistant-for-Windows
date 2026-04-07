@@ -1,0 +1,44 @@
+{
+  "rules": {
+    "suspicious_ports": [1337, 4444, 5555, 6666],
+    "suspicious_process_names": ["nc.exe", "ncat.exe", "netcat.exe", "psexec.exe", "socat.exe"],
+    "suspicious_command_line_patterns": [
+      " -enc ",
+      " -encodedcommand ",
+      "frombase64string(",
+      "downloadstring(",
+      "invoke-expression",
+      "invoke-webrequest",
+      "iex("
+    ],
+    "known_networks": ["8.8.8.8/32", "1.1.1.1/32"],
+    "known_network_files": ["known_ips.example.txt"],
+    "outbound_connection_threshold": 20,
+    "unique_ip_threshold": 12,
+    "beacon_min_samples": 4,
+    "beacon_jitter_seconds": 3.0,
+    "medium_intel_threshold": 40,
+    "high_intel_threshold": 75
+  },
+  "threat_intel": {
+    "abuseipdb_api_key": "",
+    "virustotal_api_key": "",
+    "cache_ttl_seconds": 3600,
+    "timeout_seconds": 5,
+    "max_retries": 1
+  },
+  "runtime": {
+    "interval_seconds": 5,
+    "export_path": "logs",
+    "scan_log_path": "logs/scans.jsonl",
+    "database_path": "logs/hids_history.db",
+    "state_path": "logs/detection_state.json",
+    "history_limit": 100,
+    "state_history_size": 20
+  },
+  "api": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 5000
+  }
+}
