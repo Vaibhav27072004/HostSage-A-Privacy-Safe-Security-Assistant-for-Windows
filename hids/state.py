@@ -9,6 +9,38 @@ from hids.models import ConnectionRecord
 from hids.parser import is_public_ip
 
 
+def _restore_connection_keys(
+    raw_entries: object,
+) -> set[tuple[int, str, str, int | None, str, int | None, str]]:
+    """Rebuild connection keys written by :meth:`DetectionState.to_dict`.
+
+    JSON turns the tuples into lists and loses the int/None distinction, so each
+    field is coerced back to the shape ``ConnectionRecord.connection_key`` uses.
+    """
+    restored: set[tuple[int, str, str, int | None, str, int | None, str]] = set()
+    if not isinstance(raw_entries, list):
+        return restored
+
+    for entry in raw_entries:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 7:
+            continue
+        try:
+            restored.add(
+                (
+                    int(entry[0]),
+                    str(entry[1]),
+                    str(entry[2]),
+                    None if entry[3] is None else int(entry[3]),
+                    str(entry[4]),
+                    None if entry[5] is None else int(entry[5]),
+                    str(entry[6]),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return restored
+
+
 class DetectionState:
     def __init__(self, max_history: int = 20) -> None:
         self._max_history = max_history
@@ -35,6 +67,11 @@ class DetectionState:
                 continue
 
             behavior_key = connection.behavior_key
+            if behavior_key in new_events:
+                # Concurrent sockets to the same endpoint are one observation, not
+                # several. Appending once per connection would stack identical
+                # timestamps and make any multi-socket client look perfectly periodic.
+                continue
             self._beacon_history[behavior_key].append(timestamp)
             new_events.add(behavior_key)
 
@@ -62,6 +99,7 @@ class DetectionState:
         return {
             "max_history": self._max_history,
             "beacon_history": beacon_history,
+            "previous_connections": [list(key) for key in sorted(self._previous_connections, key=repr)],
         }
 
     def save(self, path: Path | None) -> None:
@@ -93,6 +131,8 @@ class DetectionState:
                 (float(timestamp) for timestamp in timestamps),
                 maxlen=history_limit,
             )
+
+        state._previous_connections = _restore_connection_keys(payload.get("previous_connections", []))
 
         return state
 

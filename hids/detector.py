@@ -46,6 +46,7 @@ class Detector:
             if connection.direction == "OUTBOUND"
             and connection.remote_ip
             and is_public_ip(connection.remote_ip)
+            and not self._is_known_network(connection.remote_ip)
         ]
 
         alerts.extend(self._detect_connection_rules(public_outbound, timestamp, intel_cache))
@@ -202,8 +203,6 @@ class Detector:
         alerts: list[Alert] = []
         by_remote_ip: dict[str, list[ConnectionRecord]] = defaultdict(list)
         for connection in connections:
-            if self._is_known_network(connection.remote_ip):
-                continue
             by_remote_ip[connection.remote_ip].append(connection)
 
         for remote_ip, ip_connections in by_remote_ip.items():
@@ -290,7 +289,18 @@ class Detector:
         intervals = [history[index] - history[index - 1] for index in range(1, len(history))]
         if len(intervals) < self._config.beacon_min_samples - 1:
             return False
+
+        # Samples that arrive faster than one beacon interval are not check-ins.
+        # Without this guard a run of identical timestamps yields intervals of
+        # zero, which satisfies any jitter tolerance and flags ordinary clients
+        # that hold several sockets open to the same endpoint.
+        minimum_interval = self._config.beacon_min_interval_seconds
+        if any(interval < minimum_interval for interval in intervals):
+            return False
+
         average = sum(intervals) / len(intervals)
+        if average < minimum_interval:
+            return False
         return all(abs(interval - average) <= self._config.beacon_jitter_seconds for interval in intervals)
 
     def _is_known_network(self, ip_address: str) -> bool:

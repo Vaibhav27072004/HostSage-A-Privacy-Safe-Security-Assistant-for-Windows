@@ -135,7 +135,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-host",
         default=None,
-        help="Override the API bind host.",
+        help=(
+            "Override the API bind host. The API is unauthenticated, so keep it on 127.0.0.1 "
+            "unless you have placed it behind your own authenticated proxy."
+        ),
     )
     parser.add_argument(
         "--api-port",
@@ -286,7 +289,22 @@ def start_background_monitoring(service: HIDSService, interval_seconds: int) -> 
     return thread
 
 
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def warn_if_api_exposed(host: str) -> None:
+    if host in LOOPBACK_HOSTS:
+        return
+    print(
+        f"Warning: the API has no authentication and is binding to {host}, so anyone who can "
+        "reach this host can read your alerts, including full executable paths and command lines. "
+        "Bind 127.0.0.1 unless you have put the API behind your own authenticated proxy.",
+        file=sys.stderr,
+    )
+
+
 def serve_api(service: HIDSService, config: HIDSConfig) -> int:
+    warn_if_api_exposed(config.api.host)
     start_background_monitoring(service, config.runtime.interval_seconds)
     app = create_app(service)
 
@@ -359,7 +377,13 @@ def main() -> int:
     if service_result is not None:
         return service_result
 
-    config = load_config(Path(args.config))
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(
+            f"Config file not found: {config_path.resolve()}. Continuing with built-in defaults.",
+            file=sys.stderr,
+        )
+    config = load_config(config_path)
     config = apply_cli_overrides(config, args)
     color_enabled = supports_color(args.no_color)
 

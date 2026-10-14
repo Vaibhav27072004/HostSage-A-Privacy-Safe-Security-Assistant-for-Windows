@@ -17,6 +17,7 @@
     "unique_ip_threshold": 12,
     "beacon_min_samples": 4,
     "beacon_jitter_seconds": 3.0,
+    "beacon_min_interval_seconds": 1.0,
     "medium_intel_threshold": 40,
     "high_intel_threshold": 75
   },

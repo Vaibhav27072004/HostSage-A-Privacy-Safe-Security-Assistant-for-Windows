@@ -20,6 +20,10 @@ class ConnectionCollector:
     def collect(self) -> CollectionResult:
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         warnings: list[str] = []
+        # Deduplicating lookups within one scan is the win worth having; keeping
+        # them across scans would let PID reuse rename a process under long runs
+        # such as the Windows Service.
+        self._process_cache.clear()
 
         if psutil is not None:
             try:

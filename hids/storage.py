@@ -3,15 +3,41 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 
 from hids.models import Alert, ScanResult
 
+# Only these errors mean the file itself is unusable. Everything else a
+# DatabaseError can carry - a lock, a busy writer, a full disk - is transient,
+# and deleting history to recover from it would destroy readable data.
+CORRUPTION_MARKERS = (
+    "file is not a database",
+    "database disk image is malformed",
+    "file is encrypted",
+    "unsupported file format",
+)
+
+DEFAULT_LOCK_TIMEOUT_SECONDS = 5.0
+
+
+def is_corruption_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in CORRUPTION_MARKERS)
+
 
 class SQLiteHistoryStore:
-    def __init__(self, database_path: str | None) -> None:
+    def __init__(
+        self,
+        database_path: str | None,
+        *,
+        lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+    ) -> None:
         self._database_path = Path(database_path) if database_path else None
         self._active_database_path = self._database_path
+        self._lock_timeout_seconds = lock_timeout_seconds
+        self._using_fallback = False
+        self._quarantined_paths: list[str] = []
 
     @property
     def enabled(self) -> bool:
@@ -31,12 +57,19 @@ class SQLiteHistoryStore:
             self._active_database_path = database_path
             try:
                 self._write_scan_once(result, database_path)
+                self._using_fallback = database_path != self._database_path
                 return database_path
             except sqlite3.DatabaseError as exc:
                 last_error = exc
+                if not is_corruption_error(exc):
+                    # A lock or other transient failure. Raising keeps history in
+                    # one file and lets the caller report the failed scan write,
+                    # instead of silently splitting it across a second database.
+                    raise
                 self._reset_database_files(database_path)
                 try:
                     self._write_scan_once(result, database_path)
+                    self._using_fallback = database_path != self._database_path
                     return database_path
                 except sqlite3.DatabaseError as retry_exc:
                     last_error = retry_exc
@@ -338,7 +371,15 @@ class SQLiteHistoryStore:
 
     def get_storage_stats(self) -> dict[str, object]:
         if self._database_path is None:
-            return {"backend": "disabled", "database_path": None, "scan_count": 0, "alert_count": 0}
+            return {
+                "backend": "disabled",
+                "database_path": None,
+                "scan_count": 0,
+                "alert_count": 0,
+                "fallback_active": False,
+                "configured_database_path": None,
+                "quarantined_paths": [],
+            }
 
         for database_path in self._candidate_paths(existing_only=True):
             with closing(self._connect(database_path)) as connection:
@@ -346,11 +387,16 @@ class SQLiteHistoryStore:
                 scan_count = int(connection.execute("SELECT COUNT(*) FROM scans").fetchone()[0])
                 alert_count = int(connection.execute("SELECT COUNT(*) FROM alerts").fetchone()[0])
             self._active_database_path = database_path
+            using_fallback = database_path != self._database_path
+            self._using_fallback = using_fallback
             return {
                 "backend": "sqlite",
                 "database_path": str(database_path),
                 "scan_count": scan_count,
                 "alert_count": alert_count,
+                "fallback_active": using_fallback,
+                "configured_database_path": str(self._database_path),
+                "quarantined_paths": list(self._quarantined_paths),
             }
 
         return {
@@ -358,34 +404,58 @@ class SQLiteHistoryStore:
             "database_path": str(self._active_database_path or self._database_path),
             "scan_count": 0,
             "alert_count": 0,
+            "fallback_active": self._using_fallback,
+            "configured_database_path": str(self._database_path),
+            "quarantined_paths": list(self._quarantined_paths),
         }
 
     def _connect(self, database_path: Path) -> sqlite3.Connection:
-        connection = sqlite3.connect(database_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = MEMORY")
+        connection = sqlite3.connect(database_path, timeout=self._lock_timeout_seconds)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            # WAL suits one writer plus concurrent readers (CLI alongside the
+            # service) and, unlike MEMORY, survives a crash mid-write.
+            connection.execute("PRAGMA journal_mode = WAL")
+        except BaseException:
+            # A PRAGMA on an unusable file raises here. Closing explicitly stops
+            # the handle leaking, which on Windows would also block the cleanup
+            # that corruption recovery depends on.
+            connection.close()
+            raise
         return connection
 
     def _reset_database_files(self, database_path: Path | None) -> bool:
         if database_path is None:
             return False
 
+        suffix = f".corrupt-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         candidates = [
             database_path,
             database_path.with_name(database_path.name + "-journal"),
             database_path.with_name(database_path.name + "-wal"),
             database_path.with_name(database_path.name + "-shm"),
         ]
-        removed_any = False
+        moved_any = False
         for candidate in candidates:
-            try:
-                if candidate.exists():
-                    candidate.unlink()
-                    removed_any = True
-            except OSError:
+            if not candidate.exists():
                 continue
-        return removed_any
+            quarantine_path = candidate.with_name(candidate.name + suffix)
+            try:
+                candidate.replace(quarantine_path)
+            except OSError:
+                # Moving it aside is preferable, but a database we cannot read
+                # and cannot move would block recovery entirely.
+                try:
+                    candidate.unlink()
+                except OSError:
+                    continue
+                moved_any = True
+                continue
+            if candidate == database_path:
+                self._quarantined_paths.append(str(quarantine_path))
+            moved_any = True
+        return moved_any
 
     def _candidate_paths(self, *, existing_only: bool = False) -> list[Path]:
         if self._database_path is None:

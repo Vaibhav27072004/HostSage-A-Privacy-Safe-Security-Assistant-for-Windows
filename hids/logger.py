@@ -103,6 +103,9 @@ class JsonAlertLogger:
                 "database_path": None,
                 "scan_count": 0,
                 "alert_count": 0,
+                "fallback_active": False,
+                "configured_database_path": None,
+                "quarantined_paths": [],
                 "error": str(exc),
             }
 

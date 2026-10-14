@@ -42,6 +42,7 @@ class RuleConfig:
     unique_ip_threshold: int = 12
     beacon_min_samples: int = 4
     beacon_jitter_seconds: float = 3.0
+    beacon_min_interval_seconds: float = 1.0
     medium_intel_threshold: int = 40
     high_intel_threshold: int = 75
 
@@ -151,6 +152,9 @@ def load_config(path: Path) -> HIDSConfig:
     config.rules.beacon_min_samples = int(rules.get("beacon_min_samples", config.rules.beacon_min_samples))
     config.rules.beacon_jitter_seconds = float(
         rules.get("beacon_jitter_seconds", config.rules.beacon_jitter_seconds)
+    )
+    config.rules.beacon_min_interval_seconds = float(
+        rules.get("beacon_min_interval_seconds", config.rules.beacon_min_interval_seconds)
     )
     config.rules.medium_intel_threshold = int(
         rules.get("medium_intel_threshold", config.rules.medium_intel_threshold)

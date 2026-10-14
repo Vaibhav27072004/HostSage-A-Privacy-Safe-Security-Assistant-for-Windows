@@ -186,6 +186,8 @@ class HIDSService:
             }
 
         risk_breakdown = Counter(alert.risk_label for alert in result.alerts)
+        with self._lock:
+            history_count = len(self._history)
         return {
             "status": "ok",
             "timestamp": result.timestamp,
@@ -198,7 +200,7 @@ class HIDSService:
             "warnings": list(result.warnings),
             "warning_count": len(result.warnings),
             "uptime_seconds": int((datetime.now(timezone.utc) - self._started_at).total_seconds()),
-            "history_count": len(self.get_recent_scans()),
+            "history_count": history_count,
             "storage": self.get_storage_stats(),
         }
 

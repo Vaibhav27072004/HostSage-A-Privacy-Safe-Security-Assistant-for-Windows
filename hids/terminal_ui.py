@@ -252,6 +252,22 @@ def build_config_overview_lines(
             ]
         )
     )
+    quarantined = list(storage_stats.get("quarantined_paths") or [])
+    if storage_stats.get("fallback_active") or quarantined:
+        lines.extend(build_section_lines("Storage Warning", color_enabled=color_enabled))
+    if storage_stats.get("fallback_active"):
+        lines.extend(
+            [
+                "- History is being read from a fallback database because the configured",
+                f"  file was unusable: {storage_stats.get('configured_database_path', 'unknown')}",
+                "- Earlier history may still live in the configured file. Repair or remove it,",
+                "  then restart so both files are not kept in parallel.",
+            ]
+        )
+    if quarantined:
+        lines.append("- An unreadable history database was moved aside and a new one started.")
+        lines.append("  Previous history was kept for review at:")
+        lines.extend(f"    {path}" for path in quarantined)
     return lines
 
 
