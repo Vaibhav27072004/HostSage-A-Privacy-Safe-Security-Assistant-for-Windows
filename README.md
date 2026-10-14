@@ -1,8 +1,28 @@
 # HostSage: A Privacy-Safe Security Assistant for Windows
 
-This project is a lightweight, Windows-friendly Host-Based Intrusion Detection System (HIDS) built with Python. It watches live network connections on your machine, maps them to the process that opened them, and raises alerts when behavior looks suspicious.
+**A lightweight Windows host intrusion detector that tells you which process opened a connection, explains why it matters in plain language, and lets you share the finding without leaking your machine's details.**
 
-The goal is simple: help users notice unusual outbound activity early, investigate it faster, and keep systems safer without needing a large enterprise security stack.
+Built with Python and `psutil`. No agent fleet, no licence, no SOC required.
+
+## The Problem This Solves
+
+Right now your computer has dozens of open network connections. Try to answer three questions about them:
+
+1. **Which program opened each one?** Windows will show you the connections with `netstat -ano`, but only as numbers. Mapping a PID to a program, its install path, and the command line that launched it is a separate manual lookup for every single row.
+2. **Is any of it unusual?** A connection to port 4444, one process talking to forty different hosts, or a reconnect every thirty seconds like clockwork. These are ordinary-looking rows in a table, and obvious signals once something tells you what to look for.
+3. **Can you ask someone for help?** The moment you paste your logs into a chat or an issue tracker, you have also handed over your usernames, your internal IP addresses, your folder layout, and whatever secrets were sitting in a command line.
+
+Enterprise tooling answers all three. It also costs money, needs infrastructure, and assumes someone on staff already speaks fluent security. For a student, a solo developer, or a small team with no security budget, the practical options are "install a heavyweight agent" or "hope nothing is wrong."
+
+HostSage is built for that gap. One command, a readable answer, and a report you can safely send to someone else.
+
+```text
+ 1. [HIGH] suspicious port          python.exe (PID 1234)        -> 185.234.217.12:4444 | score 70
+    why: Ports such as 4444 or 5555 are often used by reverse shells, tunnels, or unauthorized remote tools.
+    next: Confirm whether this process is expected to use the reported port.
+```
+
+That is the whole idea: the process, the destination, the reason, and the next step, in the place where you already are.
 
 ## Quick Start
 
@@ -94,22 +114,77 @@ Use this quick checklist before publishing the repository:
 
 The detector collects active network connections, checks which process owns each connection, and applies a set of security-focused rules. It can also enrich suspicious public IP addresses with optional threat intelligence from AbuseIPDB or VirusTotal.
 
-This makes the project useful for:
+## Who It Helps, and How
 
-- students learning cybersecurity and network monitoring
-- developers who want visibility into what their machine is connecting to
-- lab environments and security demos
-- lightweight endpoint monitoring on Windows systems
+**Students learning security.** You get to see command-and-control beaconing, port-based detection, and IP reputation scoring against your own live traffic instead of a canned lab capture, with an explanation of what each rule is actually looking for. Every alert carries a *why it matters* line and a *false positive note*, so the tool teaches while it reports.
 
-## What Makes This Project Different
+**Solo developers and freelancers.** You find out that a dependency's post-install script phones home, or that a tool you installed last week opens a connection every thirty seconds. One command, no agent, no account.
 
-Many HIDS-style student tools stop at raw alerts. This project goes further by focusing on usability and safer collaboration:
+**Small teams with no security budget.** Install it as a Windows Service and it monitors continuously, keeps queryable history in SQLite, and exposes a local HTTP API you can point a dashboard at. When something looks wrong, `--share-report` produces a Markdown writeup you can hand to a contractor or attach to a ticket with the machine details already stripped out.
 
-- a guided terminal for non-expert users
-- persistent history through JSONL logs and SQLite
-- Windows Service support for always-on monitoring
-- privacy-safe Markdown reporting for sharing findings without exposing raw machine details
-- plain-language alert explanations to help users understand what happened and what to check next
+**Anyone who has to ask for help.** This is the part most tools skip. Raw logs leak usernames, internal addressing, directory structure, and command-line arguments. HostSage redacts all of it into stable aliases, so the behavior stays legible to whoever is helping you while the specifics stay on your machine:
+
+```text
+- Severity: HIGH (score 82)
+- Detection rule: `suspicious_port`
+- Observed process: python.exe (PID 4242)
+- Local endpoint alias: local-host-1:55000
+- Remote endpoint alias: remote-host-1:4444
+- Process path: <redacted-path>/python.exe
+- Command line: Redacted command line for python.exe (4 tokens hidden)
+```
+
+The token count is kept on purpose. A reviewer can tell there were four arguments without seeing what they were.
+
+## Case Study: Making the Alerts Worth Trusting
+
+A detector that cries wolf is worse than no detector, because people learn to close it. That was not a hypothetical risk for this project. It happened here, and fixing it has been the most valuable work the project has had.
+
+**What went wrong.** On a first run against an ordinary developer laptop, HostSage reported this:
+
+```text
+ 1. [HIGH] periodic beacon          <desktop app> (PID 22488)   -> <endpoint>:443 | score 85
+    why: Regular reconnect intervals are a common trait of command-and-control check-ins.
+```
+
+A routine desktop application, scored 85 out of 100, labelled with the signature of malware calling home. On the very first scan, before any timing history could possibly exist.
+
+**The root cause.** Beacon detection tracked history per `(pid, process, remote ip, remote port)`, but decided whether a connection was *new* using a key that also included the local port. An application holding twenty sockets open to one endpoint therefore recorded twenty separate observations, all stamped with the same scan time. The timing check then measured the gaps between them:
+
+```text
+intervals_seconds: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ... ]
+```
+
+Zero variance. Mathematically a perfect beacon, which is exactly the wrong conclusion. Any program that keeps several connections open to one server, which is to say every browser, chat client, and sync tool, was guaranteed to trip the highest-severity rule in the project.
+
+**The fix.** Two changes, because there were two distinct faults:
+
+- concurrent sockets to the same endpoint are now recorded as **one observation per scan**, not one per socket
+- the timing check **rejects degenerate intervals** outright. Samples closer together than one configurable beacon interval are not check-ins, and a run of identical timestamps can no longer pass a jitter tolerance that it only satisfied because the spread was zero
+
+A related fault sat behind it. The detector saved its beacon timestamps across restarts but not its record of which connections it had already seen, so every restart treated every open socket as brand new and rebuilt the same false pattern from scratch. That state is now persisted too, which matters most in Windows Service mode, where a restart happens on every boot.
+
+**The result.** Verified on the same machine that produced the false positive, across five consecutive runs:
+
+| Measure | Before | After |
+| --- | --- | --- |
+| Beacon alerts on ordinary traffic | HIGH, score 85 | none |
+| Timing samples per endpoint, per scan | up to 20 | 1 |
+| Intervals measured | all `0.0` | genuine elapsed time |
+| Genuine periodic beaconing still detected | yes | yes |
+
+That last row is the one that matters. The rule was not weakened into silence, it was corrected, so it fires on real periodicity and stays quiet on ordinary software. Regression tests now cover both halves, including the exact case that originally broke.
+
+**What else the review turned up.** Chasing one false positive exposed four more problems worth naming, because each would have cost a user something real:
+
+- **A trusted-IP allowlist that mostly did not work.** `known_networks` was only consulted by the threat-intelligence rules, so adding an address you trusted still left it flagged for suspicious ports, risky process names, and connection volume. The allowlist is now applied once, ahead of every rule.
+- **A history database that could delete itself.** On any database error the store removed the file and started over, and `database is locked` is such an error, so the ordinary case of the CLI running alongside the service risked wiping saved history. Locks are now treated as temporary and reported, while genuine corruption moves the unreadable file aside as `*.corrupt-<timestamp>` and keeps it, because on a security tool that history is evidence.
+- **Alerts that could name the wrong program.** Process details were cached and never invalidated, so under a long-running service, Windows reusing a PID would eventually attribute a connection to a process that had already exited. The cache is now scoped to a single scan.
+- **An unauthenticated API with no warning attached.** It binds to `127.0.0.1` by default, which is correct, but moving it off loopback silently published full executable paths and command lines to the network. That now warns loudly.
+
+**Test coverage** went from 27 tests to 72, closing the three modules that previously had none, with every fix above locked in by a regression test.
+
+The lesson generalises to any detection tool: a rule that produces confident high-severity alerts on normal software does more damage than a rule that does not exist. Being right quietly is the feature.
 
 ## How It Helps Keep Systems Safe
 
@@ -235,12 +310,13 @@ Important configuration options:
 - `rules.suspicious_ports`: ports that should be flagged immediately
 - `rules.suspicious_process_names`: process names or keywords to treat as suspicious
 - `rules.suspicious_command_line_patterns`: encoded or attacker-style command-line substrings to flag
-- `rules.known_networks`: trusted public IPs or CIDR ranges to allow
+- `rules.known_networks`: trusted public IPs or CIDR ranges to allow, applied to every detection rule
 - `rules.known_network_files`: external files containing trusted IPs or CIDR ranges
 - `rules.outbound_connection_threshold`: alert when one process opens too many outbound connections
 - `rules.unique_ip_threshold`: alert when one process contacts too many unique public IPs
 - `rules.beacon_min_samples`: minimum repeated events before beacon checks run
 - `rules.beacon_jitter_seconds`: timing tolerance for beacon detection
+- `rules.beacon_min_interval_seconds`: shortest gap that still counts as a beacon check-in, which keeps processes holding several sockets open to one endpoint from looking periodic
 - `threat_intel.abuseipdb_api_key`: optional API key for AbuseIPDB
 - `threat_intel.virustotal_api_key`: optional API key for VirusTotal
 - `runtime.interval_seconds`: scan interval for watch mode
@@ -249,7 +325,7 @@ Important configuration options:
 - `runtime.database_path`: SQLite database for durable scan and alert history
 - `runtime.state_path`: persistent state file used for repeated-behavior detection
 - `runtime.history_limit`: number of recent scans kept in memory for the API
-- `api.host` and `api.port`: API bind settings
+- `api.host` and `api.port`: API bind settings. The API has no authentication, so keep `api.host` on `127.0.0.1` unless you put it behind your own authenticated proxy
 
 Supported environment overrides:
 
@@ -261,6 +337,7 @@ Supported environment overrides:
 - `HIDS_DATABASE_PATH`
 - `HIDS_STATE_PATH`
 - `HIDS_HISTORY_LIMIT`
+- `HIDS_STATE_HISTORY_SIZE`
 - `HIDS_API_HOST`
 - `HIDS_API_PORT`
 
@@ -351,7 +428,12 @@ This writes alert JSONL files. The upgraded project also keeps a continuous scan
 python -m hids --database logs\custom_history.db
 ```
 
-If the configured SQLite file is locked or unusable, the project automatically falls back to a sibling `*_fallback.db` file so historical storage keeps working.
+How storage handles trouble:
+
+- a locked database is treated as temporary. The scan reports a warning and the next scan writes normally, so history is never split across two files
+- an unreadable or corrupted database is moved aside as `*.corrupt-<timestamp>` and a fresh one is started at the configured path. The old file is kept for review rather than deleted
+- if the corrupted file can be neither read nor moved aside, the project falls back to a sibling `*_fallback.db` file, and the terminal's configuration screen reports that a fallback is active
+- any other write failure, such as a path that cannot be opened at all, is reported as a scan warning rather than hidden, because a sibling file in the same folder would fail the same way
 
 > Important: Clear all exported logs and database files before sending project outputs to another person.
 
@@ -501,13 +583,22 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## Limitations
 
 - This tool is heuristic-based, so false positives are possible.
+- Beacon detection samples one observation per scan, so it cannot resolve timing faster than `runtime.interval_seconds`, and a process that opens a fresh connection to the same destination on every scan can still look regular.
 - It is designed for defensive monitoring and investigation, not automatic blocking.
 - It does not inspect encrypted payload contents.
 - It should be used alongside firewalls, antivirus, patching, and other security controls.
 
 ## Summary
 
-This project helps make systems safer by turning raw network activity into readable security alerts. Instead of manually checking connections and guessing what is normal, users can quickly spot suspicious behavior, identify the responsible process, and investigate with better context.
+HostSage turns a table of numbers into an answer. Instead of reading `netstat` output and guessing what is normal, you get the responsible process, a plain-language reason, a suggested next step, and an honest note about when the alert is likely to be wrong.
+
+Three things it is built to do well:
+
+- **Attribute.** Every connection is tied to the process, path, and command line behind it, because "something is talking to this address" is not actionable on its own.
+- **Explain.** Each rule ships with why it matters, what to check next, and when it tends to produce false positives, so the tool is usable by someone who is still learning.
+- **Share safely.** Findings leave the machine as aliases and summaries rather than raw logs, so asking for help does not mean publishing your environment.
+
+It is not a firewall, an antivirus, or a SOC platform, and it does not block anything. It is the missing middle step between noticing that something feels off and knowing what to look at.
 
 ## License
 
